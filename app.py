@@ -1,13 +1,28 @@
-from flask import Flask, request, jsonify
-from flask_cors import CORS # type: ignore
-import os
+import subprocess
+from pathlib import Path
+from predict import predict_direction
 import pandas as pd
-from predict.predict_direction import predict_market_direction
 
-app = Flask(__name__)
-CORS(app)  #! Enable CORS for all routes
 
-DATA_FOLDER = "data"
+def run_script(script_path):
+    """Run a Python script and handle errors."""
+    print(f"🚀 Running: {script_path}")
+    try:
+        subprocess.run(["python", script_path], check=True)
+        print(f"✅ Completed: {script_path}\n")
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Failed to run {script_path}\nError: {e}")
+        exit(1)
+
+
+def list_currency_pairs(data_dir):
+    """List all available CSV files (currency pairs)."""
+    print("📂 Available currency pairs:\n")
+    csv_files = list(Path(data_dir).glob("*.csv"))
+    for idx, file in enumerate(csv_files, start=1):
+        print(f"{idx}. {file.stem}")
+    return csv_files
+
 
 def decide_action(confidence_scores):
     """Determine trading action based on model's confidence scores."""
@@ -23,6 +38,7 @@ def decide_action(confidence_scores):
         return "Sell"
     else:
         return "Don't Enter"
+
 
 def calculate_tp_sl(csv_file_path, action, tp_ratio=2, sl_ratio=1):
     """Calculate TP and SL based on the latest close price."""
@@ -44,58 +60,56 @@ def calculate_tp_sl(csv_file_path, action, tp_ratio=2, sl_ratio=1):
 
     return round(tp, 5), round(sl, 5)
 
-@app.route("/")
-def index():
-    return jsonify({
-        "message": "Welcome to the SMC Forex Predictor API.",
-        "endpoints": {
-            "GET /data": "List available data files",
-            "POST /predict": "Send filename to get market prediction"
-        }
-    })
 
-@app.route("/data", methods=["GET"])
-def list_data_files():
+def main():
+    print("📈 Welcome to SMC Forex Predictor!\n")
+
+    # Optional steps
+    print("🔄 Running optional scripts...")
+    print("Creating features...")
+    run_script("features/create_features.py")
+
+    print("Training model...")
+    run_script("model/train_model.py")
+
+    print("Evaluating model...")
+    run_script("model/evaluate_model.py")
+
+    # Select data
+    data_dir = "data"
+    csv_files = list_currency_pairs(data_dir)
+
     try:
-        files = [f for f in os.listdir(DATA_FOLDER) if f.endswith(".csv")]
-        return jsonify({"available_files": files})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        choice = int(input("\n🔢 Enter the number of the currency pair you want to predict: "))
+        selected_file = csv_files[choice - 1]
+    except (ValueError, IndexError):
+        print("❌ Invalid choice. Exiting.")
+        return
 
-@app.route("/predict", methods=["POST"])
-def predict():
-    try:
-        data = request.get_json()
-        filename = data.get("filename")
+    print(f"\n🔍 Predicting trend for: {selected_file.stem}")
+    results = predict_direction.predict_market_direction(str(selected_file))
 
-        if not filename:
-            return jsonify({"error": "Filename is required."}), 400
+    for prediction, confidence in results:
+        print(f"\n📊 Prediction: {prediction}")
 
-        filepath = os.path.join(DATA_FOLDER, filename)
+        if confidence:
+            print("📈 Confidence Scores:")
+            for label, prob in confidence.items():
+                print(f"  - {label}: {prob * 100:.2f}%")
 
-        if not os.path.exists(filepath):
-            return jsonify({"error": f"File '{filename}' not found."}), 404
+            action = decide_action(confidence)
+            print(f"\n🚦 Final Action: {action}")
 
-        # Run prediction
-        results = predict_market_direction(filepath)
+            # ✅ Add TP and SL calculation
+            tp, sl = calculate_tp_sl(str(selected_file), action)
+            if tp is not None and sl is not None:
+                print(f"🎯 Take Profit: {tp}")
+                print(f"🛡️ Stop Loss: {sl}")
+            else:
+                print("⚠️ Could not calculate TP/SL.")
+        else:
+            print("⚠️ No confidence data available. Default action: Don't Enter")
 
-        response = []
-        for label, confidence_scores in results:
-            action = decide_action(confidence_scores)
-            tp, sl = calculate_tp_sl(filepath, action)
-
-            response.append({
-                "prediction": label,
-                "confidence": {k: round(v * 100, 2) for k, v in confidence_scores.items()},
-                "action": action,
-                "take_profit": tp,
-                "stop_loss": sl
-            })
-
-        return jsonify(response)
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    main()
