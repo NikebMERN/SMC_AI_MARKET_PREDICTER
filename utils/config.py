@@ -8,5 +8,5 @@ load_dotenv()
 ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY")
 
 # You can also define symbol, interval, etc. if you want
-SYMBOL = "USDCAD"
+SYMBOL = "NZDUSD"
 INTERVAL = "5min"
